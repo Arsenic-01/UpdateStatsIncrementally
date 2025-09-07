@@ -9,21 +9,30 @@ const getAndParseJSON = async (db, databaseId, collectionId, documentId) => {
 // --- Task 1: Incrementally Update Teacher Stats ---
 async function updateTeacherStats({ db, log, error, event, eventData }) {
     log('Starting: Incremental Teacher Stats Update...');
-    const { APPWRITE_DATABASE_ID, STATS_COLLECTION_ID, STATS_DOCUMENT_ID, APPWRITE_NOTE_COLLECTION_ID, APPWRITE_FORM_COLLECTION_ID, APPWRITE_YOUTUBE_COLLECTION_ID } = process.env;
+    const { 
+        APPWRITE_DATABASE_ID, 
+        CACHE_COLLECTION_ID, 
+        STATS_DOCUMENT_ID, 
+        APPWRITE_NOTE_COLLECTION_ID, 
+        APPWRITE_FORM_COLLECTION_ID, 
+        APPWRITE_YOUTUBE_COLLECTION_ID 
+    } = process.env;
 
-    // For stats, we only act on create and delete. Updates are too complex without knowing the "before" state.
-    if (!event.includes('.create') && !event.includes('.delete')) {
-        log('Skipping stats update for non-create/delete event.');
+    // We ONLY act on '.create' events. The data payload for '.delete' events is empty,
+    // making it impossible to know which user's stats to decrement.
+    if (!event.includes('.create')) {
+        log('Skipping stats update for non-create event. This is expected for deletes.');
         return;
     }
 
     const userName = eventData.userName || eventData.createdBy;
     if (!userName) {
-        log('Skipping stats update: No user to attribute.');
+        log('Skipping stats update: No user could be attributed to the new document.');
         return;
     }
 
-    const statsData = await getAndParseJSON(db, APPWRITE_DATABASE_ID, STATS_COLLECTION_ID, STATS_DOCUMENT_ID);
+    const statsData = await getAndParseJSON(db, APPWRITE_DATABASE_ID, CACHE_COLLECTION_ID, STATS_DOCUMENT_ID);
+    
     let userStats = statsData.find(u => u.name === userName);
 
     if (!userStats) {
@@ -31,29 +40,22 @@ async function updateTeacherStats({ db, log, error, event, eventData }) {
         statsData.push(userStats);
     }
     
+    const increment = 1; // Always 1 because we only handle creation
     const collectionId = event.split('.')[3];
-    const increment = event.includes('.create') ? 1 : -1;
 
     if (collectionId === APPWRITE_NOTE_COLLECTION_ID) userStats.notes += increment;
     if (collectionId === APPWRITE_FORM_COLLECTION_ID) userStats.forms += increment;
     if (collectionId === APPWRITE_YOUTUBE_COLLECTION_ID) userStats.youtube += increment;
     userStats.total += increment;
 
-    // Ensure counts don't go below zero
-    userStats.notes = Math.max(0, userStats.notes);
-    userStats.forms = Math.max(0, userStats.forms);
-    userStats.youtube = Math.max(0, userStats.youtube);
-    userStats.total = Math.max(0, userStats.total);
-
     statsData.sort((a, b) => b.total - a.total);
 
     await db.updateDocument(
-        APPWRITE_DATABASE_ID, STATS_COLLECTION_ID, STATS_DOCUMENT_ID,
+        APPWRITE_DATABASE_ID, CACHE_COLLECTION_ID, STATS_DOCUMENT_ID,
         { data: JSON.stringify(statsData) }
     );
     log(`Finished: Incremental Teacher Stats Update for ${userName}.`);
 }
-
 
 // --- Task 2: Incrementally Update Links Cache ---
 async function updateLinksCache({ db, log, error, event, eventData }) {
